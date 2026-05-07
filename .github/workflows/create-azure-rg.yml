@@ -173,8 +173,9 @@ jobs:
 
       # --- Create the resource group with all required tags ---
       - name: Create Resource Group
+        id: create
         run: |
-          az group create \
+          RESULT=$(az group create \
             --name "${{ needs.azure-guard.outputs.rg_name }}" \
             --location "${{ needs.azure-guard.outputs.region }}" \
             --tags \
@@ -183,7 +184,13 @@ jobs:
               project="$(echo ${{ needs.azure-guard.outputs.rg_name }} | cut -d'-' -f2)" \
               cost-center="engineering" \
               created-by="github-actions" \
-              issue-number="${{ github.event.issue.number }}"
+              created-date="$(date -u +%Y-%m-%d)" \
+              issue-number="${{ github.event.issue.number }}")
+
+          # Extract details from Azure response
+          echo "resource_id=$(echo "$RESULT" | jq -r '.id')" >> $GITHUB_OUTPUT
+          echo "provisioning_state=$(echo "$RESULT" | jq -r '.properties.provisioningState')" >> $GITHUB_OUTPUT
+          echo "subscription=$(echo "$RESULT" | jq -r '.id' | cut -d'/' -f3)" >> $GITHUB_OUTPUT
 
       # --- Post success comment with resource details ---
       - name: "✅ Comment - Success"
@@ -200,6 +207,12 @@ jobs:
             | Region | `${{ needs.azure-guard.outputs.region }}` |
             | Environment | `${{ needs.azure-guard.outputs.environment }}` |
             | Owner | `${{ needs.azure-guard.outputs.owner }}` |
+            | Provisioning State | `${{ steps.create.outputs.provisioning_state }}` |
+            | Resource ID | `${{ steps.create.outputs.resource_id }}` |
+            | Subscription | `${{ steps.create.outputs.subscription }}` |
+            | Created Date | `${{ github.event.issue.created_at }}` |
+
+            🔗 [View in Azure Portal](https://portal.azure.com/#@/resource${{ steps.create.outputs.resource_id }})
 
       # --- Close the issue (request fulfilled) ---
       - name: Close issue
