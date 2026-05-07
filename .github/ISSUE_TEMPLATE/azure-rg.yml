@@ -1,0 +1,53 @@
+name: Request Azure Resource Group
+description: Create a new Azure Resource Group
+title: "[RG Request]: "
+labels: ["infrastructure", "azure"]
+body:
+  - type: input
+    id: rg-name
+    attributes:
+      label: Resource Group Name
+      placeholder: "rg-myproject-dev"
+      description: "Use format: rg-<project>-<environment>"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Azure Region
+      options:
+        - eastus
+        - westus2
+        - centralindia
+        - southeastasia
+        - westeurope
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - dev
+        - staging
+        - production
+    validations:
+      required: true
+
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      placeholder: "team-name or your-name"
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      placeholder: "Why do you need this resource group?"
+    validations:
+      required: true

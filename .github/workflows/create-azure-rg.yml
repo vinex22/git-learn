@@ -1,0 +1,90 @@
+name: Create Azure Resource Group
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  create-rg:
+    if: contains(github.event.issue.labels.*.name, 'azure')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Parse issue body
+        id: parse
+        uses: peter-murray/issue-body-parser-action@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_id: ${{ github.event.issue.number }}
+
+      - name: Extract fields
+        id: fields
+        run: |
+          BODY="${{ github.event.issue.body }}"
+          
+          # Extract Resource Group Name
+          RG_NAME=$(echo "$BODY" | grep -A 1 "Resource Group Name" | tail -1 | xargs)
+          echo "rg_name=$RG_NAME" >> $GITHUB_OUTPUT
+          
+          # Extract Region
+          REGION=$(echo "$BODY" | grep -A 1 "Azure Region" | tail -1 | xargs)
+          echo "region=$REGION" >> $GITHUB_OUTPUT
+          
+          # Extract Environment
+          ENVIRONMENT=$(echo "$BODY" | grep -A 1 "Environment" | tail -1 | xargs)
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          
+          # Extract Owner
+          OWNER=$(echo "$BODY" | grep -A 1 "Owner" | tail -1 | xargs)
+          echo "owner=$OWNER" >> $GITHUB_OUTPUT
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Resource Group
+        run: |
+          az group create \
+            --name "${{ steps.fields.outputs.rg_name }}" \
+            --location "${{ steps.fields.outputs.region }}" \
+            --tags \
+              environment="${{ steps.fields.outputs.environment }}" \
+              owner="${{ steps.fields.outputs.owner }}" \
+              created-by="github-actions" \
+              issue-number="${{ github.event.issue.number }}"
+
+      - name: Comment on issue - Success
+        if: success()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ✅ **Resource Group Created Successfully!**
+            
+            | Property | Value |
+            |----------|-------|
+            | Name | `${{ steps.fields.outputs.rg_name }}` |
+            | Region | `${{ steps.fields.outputs.region }}` |
+            | Environment | `${{ steps.fields.outputs.environment }}` |
+            | Owner | `${{ steps.fields.outputs.owner }}` |
+            
+            The resource group is now available in Azure.
+
+      - name: Close issue on success
+        if: success()
+        uses: peter-evans/close-issue@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          comment: "Closing - resource group has been provisioned."
+
+      - name: Comment on issue - Failure
+        if: failure()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ❌ **Failed to create Resource Group**
+            
+            Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+          
