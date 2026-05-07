@@ -82,7 +82,23 @@ az ad sp create-for-rbac --name "github-rg-creator" \
   --sdk-auth
 ```
 
-Save the JSON output — you'll need it for the next step.
+Save the JSON output — you'll need it for the next step. It looks like this:
+
+```json
+{
+  "clientId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "clientSecret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "subscriptionId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "tenantId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "activeDirectoryEndpointUrl": "https://login.microsoftonline.com",
+  "resourceManagerEndpointUrl": "https://management.azure.com/",
+  "sqlManagementEndpointUrl": "https://management.core.windows.net:8443/",
+  "galleryEndpointUrl": "https://gallery.azure.com/",
+  "managementEndpointUrl": "https://management.core.windows.net/"
+}
+```
+
+> **⚠️ Keep this secret!** Never commit this JSON to your repo. Store it only as a GitHub Secret.
 
 ### 2. Add GitHub Secrets
 
