@@ -90,6 +90,9 @@ jobs:
           AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           echo "AI Reply: $AI_REPLY"
 
+          # Strip markdown code fences if present
+          AI_REPLY=$(echo "$AI_REPLY" | sed '/^```/d')
+
           # Parse decision
           DECISION=$(echo "$AI_REPLY" | jq -r '.decision')
           REPORT=$(echo "$AI_REPLY" | jq -r '.report')
