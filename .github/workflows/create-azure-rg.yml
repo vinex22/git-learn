@@ -9,34 +9,32 @@ jobs:
     if: contains(github.event.issue.labels.*.name, 'azure')
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Parse issue body
-        id: parse
-        uses: peter-murray/issue-body-parser-action@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          issue_id: ${{ github.event.issue.number }}
+    permissions:
+      issues: write
 
+    steps:
       - name: Extract fields
         id: fields
+        env:
+          BODY: ${{ github.event.issue.body }}
         run: |
-          BODY="${{ github.event.issue.body }}"
-          
           # Extract Resource Group Name
-          RG_NAME=$(echo "$BODY" | grep -A 1 "Resource Group Name" | tail -1 | xargs)
+          RG_NAME=$(echo "$BODY" | sed -n '/### Resource Group Name/{n;/^$/d;p;}' | head -1 | xargs)
           echo "rg_name=$RG_NAME" >> $GITHUB_OUTPUT
           
           # Extract Region
-          REGION=$(echo "$BODY" | grep -A 1 "Azure Region" | tail -1 | xargs)
+          REGION=$(echo "$BODY" | sed -n '/### Azure Region/{n;/^$/d;p;}' | head -1 | xargs)
           echo "region=$REGION" >> $GITHUB_OUTPUT
           
           # Extract Environment
-          ENVIRONMENT=$(echo "$BODY" | grep -A 1 "Environment" | tail -1 | xargs)
+          ENVIRONMENT=$(echo "$BODY" | sed -n '/### Environment/{n;/^$/d;p;}' | head -1 | xargs)
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
           
           # Extract Owner
-          OWNER=$(echo "$BODY" | grep -A 1 "Owner" | tail -1 | xargs)
+          OWNER=$(echo "$BODY" | sed -n '/### Owner/{n;/^$/d;p;}' | head -1 | xargs)
           echo "owner=$OWNER" >> $GITHUB_OUTPUT
+          
+          echo "Parsed: RG=$RG_NAME, Region=$REGION, Env=$ENVIRONMENT, Owner=$OWNER"
 
       - name: Login to Azure
         uses: azure/login@v2
