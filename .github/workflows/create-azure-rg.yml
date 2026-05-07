@@ -33,7 +33,7 @@ jobs:
       - name: "🛡️ Azure Guard - AI Validation"
         id: guard
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
@@ -69,7 +69,7 @@ jobs:
 
           # Call GitHub Models API (AI inference)
           RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $GH_MODELS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
               --arg system "You are Azure Guard, a strict Azure compliance validator. Only respond with valid JSON." \
