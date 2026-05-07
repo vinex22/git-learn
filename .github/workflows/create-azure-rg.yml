@@ -18,20 +18,15 @@ jobs:
         env:
           BODY: ${{ github.event.issue.body }}
         run: |
-          # Extract Resource Group Name
-          RG_NAME=$(echo "$BODY" | sed -n '/### Resource Group Name/{n;/^$/d;p;}' | head -1 | xargs)
+          # Extract fields between ### headers
+          RG_NAME=$(echo "$BODY" | awk '/^### Resource Group Name/{found=1; next} found && /^[^#]/ && NF{print; exit}')
+          REGION=$(echo "$BODY" | awk '/^### Azure Region/{found=1; next} found && /^[^#]/ && NF{print; exit}')
+          ENVIRONMENT=$(echo "$BODY" | awk '/^### Environment/{found=1; next} found && /^[^#]/ && NF{print; exit}')
+          OWNER=$(echo "$BODY" | awk '/^### Owner/{found=1; next} found && /^[^#]/ && NF{print; exit}')
+          
           echo "rg_name=$RG_NAME" >> $GITHUB_OUTPUT
-          
-          # Extract Region
-          REGION=$(echo "$BODY" | sed -n '/### Azure Region/{n;/^$/d;p;}' | head -1 | xargs)
           echo "region=$REGION" >> $GITHUB_OUTPUT
-          
-          # Extract Environment
-          ENVIRONMENT=$(echo "$BODY" | sed -n '/### Environment/{n;/^$/d;p;}' | head -1 | xargs)
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-          
-          # Extract Owner
-          OWNER=$(echo "$BODY" | sed -n '/### Owner/{n;/^$/d;p;}' | head -1 | xargs)
           echo "owner=$OWNER" >> $GITHUB_OUTPUT
           
           echo "Parsed: RG=$RG_NAME, Region=$REGION, Env=$ENVIRONMENT, Owner=$OWNER"
