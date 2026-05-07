@@ -105,6 +105,14 @@ ALL resources MUST have these tags:
 - No empty tag values
 - `environment` must match the `<env>` in the resource name
 
+### Auto-Derived Tags (for Issue Requests):
+When validating a GitHub Issue request, the following tags are **automatically set** by the workflow and do NOT need to be provided in the issue. Do NOT flag these as missing:
+- `project` — extracted from the resource group name (`rg-<project>-<env>`)
+- `cost-center` — defaults to `engineering`
+- `created-by` — set to `github-actions`
+- `created-date` — set to the current date
+- `owner` — taken from the Owner field in the issue
+
 ---
 
 ## Rule 3: Security Rules
