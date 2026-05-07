@@ -44,6 +44,28 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: project
+    attributes:
+      label: Project
+      placeholder: "webapp"
+      description: "Project name (lowercase, alphanumeric, max 15 chars)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cost-center
+    attributes:
+      label: Cost Center
+      options:
+        - engineering
+        - marketing
+        - operations
+        - finance
+        - research
+    validations:
+      required: true
+
   - type: textarea
     id: purpose
     attributes:
