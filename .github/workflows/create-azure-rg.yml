@@ -2,11 +2,15 @@ name: Create Azure Resource Group
 
 on:
   issues:
-    types: [opened]
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
 
 jobs:
   azure-guard:
-    if: contains(github.event.issue.labels.*.name, 'azure')
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'azure')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'azure') && github.event.comment.body == '/revalidate')
     runs-on: ubuntu-latest
     permissions:
       issues: write
