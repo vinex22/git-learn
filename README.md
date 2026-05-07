@@ -129,6 +129,55 @@ The workflow, issue template, and AI rules are already in the repo. Open an issu
                          (GPT-4o)                     (az group create)
 ```
 
+## AI Response Format
+
+The workflow calls the GitHub Models API (GPT-4o) and expects a JSON response. Here's what the raw AI output looks like:
+
+**PASS example:**
+```json
+{
+  "decision": "PASS",
+  "report": "| # | Rule | Status | Details |\n|---|------|--------|---------|...",
+  "rg_name": "rg-webapp-dev",
+  "region": "eastus",
+  "environment": "dev",
+  "owner": "vinayjain",
+  "violations": []
+}
+```
+
+**FAIL example:**
+```json
+{
+  "decision": "FAIL",
+  "report": "| # | Rule | Status | Details |\n|---|------|--------|---------|...",
+  "rg_name": "Devil-PROD-RG",
+  "region": "eastus",
+  "environment": "prod",
+  "owner": "vinayjain",
+  "violations": [
+    "Name 'Devil-PROD-RG' contains forbidden word 'devil'",
+    "Name does not follow pattern rg-<project>-<env>",
+    "Uppercase letters are not allowed"
+  ]
+}
+```
+
+This JSON is wrapped inside the GitHub Models API response:
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"decision\":\"PASS\", ...}"  // ← AI's JSON is here
+      }
+    }
+  ]
+}
+```
+
+The workflow extracts it with `jq -r '.choices[0].message.content'`, then parses each field into `$GITHUB_OUTPUT` for use by later steps and jobs.
+
 ## Customizing Rules
 
 Edit `.github/agents/azure-guard.agent.md` to:
