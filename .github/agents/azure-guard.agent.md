@@ -84,6 +84,7 @@ All resources MUST follow this naming pattern:
 - `<project>` must be lowercase, alphanumeric, max 15 chars
 - No uppercase letters anywhere
 - No generic names like `test`, `temp`, `myresource`, `resource1`
+- The word `devil` is **strictly forbidden** in any part of the resource name
 
 ---
 
