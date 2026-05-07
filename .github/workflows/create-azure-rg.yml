@@ -5,137 +5,120 @@ on:
     types: [opened]
 
 jobs:
-  validate:
+  azure-guard:
     if: contains(github.event.issue.labels.*.name, 'azure')
     runs-on: ubuntu-latest
     permissions:
       issues: write
+      contents: read
     outputs:
-      rg_name: ${{ steps.fields.outputs.rg_name }}
-      region: ${{ steps.fields.outputs.region }}
-      environment: ${{ steps.fields.outputs.environment }}
-      owner: ${{ steps.fields.outputs.owner }}
+      decision: ${{ steps.guard.outputs.decision }}
+      rg_name: ${{ steps.extract.outputs.rg_name }}
+      region: ${{ steps.extract.outputs.region }}
+      environment: ${{ steps.extract.outputs.environment }}
+      owner: ${{ steps.extract.outputs.owner }}
 
     steps:
-      - name: Extract fields
-        id: fields
-        env:
-          BODY: ${{ github.event.issue.body }}
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Read Azure Guard rules
+        id: rules
         run: |
-          RG_NAME=$(echo "$BODY" | awk '/^### Resource Group Name/{found=1; next} found && /^[^#]/ && NF{print; exit}')
-          REGION=$(echo "$BODY" | awk '/^### Azure Region/{found=1; next} found && /^[^#]/ && NF{print; exit}')
-          ENVIRONMENT=$(echo "$BODY" | awk '/^### Environment/{found=1; next} found && /^[^#]/ && NF{print; exit}')
-          OWNER=$(echo "$BODY" | awk '/^### Owner/{found=1; next} found && /^[^#]/ && NF{print; exit}')
-          
+          RULES=$(cat .github/agents/azure-guard.agent.md)
+          echo "rules<<EOF" >> $GITHUB_OUTPUT
+          echo "$RULES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: "🛡️ Azure Guard - AI Validation"
+        id: guard
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          # Build the prompt for the AI agent
+          PROMPT=$(cat <<'PROMPT_END'
+          You are Azure Guard. You enforce the rules defined below.
+
+          ## RULES:
+          ${{ steps.rules.outputs.rules }}
+
+          ## ISSUE TO VALIDATE:
+          Title: ${ISSUE_TITLE}
+          Body:
+          ${ISSUE_BODY}
+
+          ## YOUR TASK:
+          1. Validate the issue inputs against ALL rules (naming, tags, region, security)
+          2. Return your response as JSON ONLY (no markdown, no explanation outside JSON):
+
+          {
+            "decision": "PASS" or "FAIL",
+            "report": "Your markdown compliance report with ✅/❌ for each rule",
+            "rg_name": "extracted resource group name",
+            "region": "extracted region",
+            "environment": "extracted environment",
+            "owner": "extracted owner",
+            "violations": ["list of violation descriptions"] or []
+          }
+
+          Return ONLY the JSON object. Nothing else.
+          PROMPT_END
+          )
+
+          # Call GitHub Models API (AI inference)
+          RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg system "You are Azure Guard, a strict Azure compliance validator. Only respond with valid JSON." \
+              --arg user "$(echo -e "Validate this Azure resource request against the rules.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nRespond with JSON only: {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown compliance report\", \"rg_name\": \"extracted name\", \"region\": \"extracted region\", \"environment\": \"extracted env\", \"owner\": \"extracted owner\", \"violations\": [\"list\"] }")" \
+              '{
+                "model": "gpt-4o-mini",
+                "messages": [
+                  {"role": "system", "content": $system},
+                  {"role": "user", "content": $user}
+                ],
+                "temperature": 0
+              }'
+            )")
+
+          echo "Raw response: $RESPONSE"
+
+          # Extract the AI's JSON response
+          AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          echo "AI Reply: $AI_REPLY"
+
+          # Parse decision
+          DECISION=$(echo "$AI_REPLY" | jq -r '.decision')
+          REPORT=$(echo "$AI_REPLY" | jq -r '.report')
+          RG_NAME=$(echo "$AI_REPLY" | jq -r '.rg_name')
+          REGION=$(echo "$AI_REPLY" | jq -r '.region')
+          ENVIRONMENT=$(echo "$AI_REPLY" | jq -r '.environment')
+          OWNER=$(echo "$AI_REPLY" | jq -r '.owner')
+
+          echo "decision=$DECISION" >> $GITHUB_OUTPUT
           echo "rg_name=$RG_NAME" >> $GITHUB_OUTPUT
           echo "region=$REGION" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
           echo "owner=$OWNER" >> $GITHUB_OUTPUT
 
-      - name: "🛡️ Azure Guard - Validate Naming Convention"
-        id: check-naming
+          # Save report for commenting
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Extract fields (fallback)
+        id: extract
         run: |
-          RG_NAME="${{ steps.fields.outputs.rg_name }}"
-          ERRORS=""
+          echo "rg_name=${{ steps.guard.outputs.rg_name }}" >> $GITHUB_OUTPUT
+          echo "region=${{ steps.guard.outputs.region }}" >> $GITHUB_OUTPUT
+          echo "environment=${{ steps.guard.outputs.environment }}" >> $GITHUB_OUTPUT
+          echo "owner=${{ steps.guard.outputs.owner }}" >> $GITHUB_OUTPUT
 
-          # Rule 1: Must start with "rg-"
-          if [[ ! "$RG_NAME" =~ ^rg- ]]; then
-            ERRORS="${ERRORS}❌ Name must start with \`rg-\`. Got: \`$RG_NAME\`\n"
-          fi
-
-          # Rule 2: Must follow rg-<project>-<env> pattern
-          if [[ ! "$RG_NAME" =~ ^rg-[a-z0-9]+-[a-z]+$ ]]; then
-            ERRORS="${ERRORS}❌ Name must match pattern \`rg-<project>-<env>\`. Got: \`$RG_NAME\`\n"
-          fi
-
-          # Rule 3: Must end with valid environment
-          if [[ ! "$RG_NAME" =~ -(dev|staging|prod)$ ]]; then
-            ERRORS="${ERRORS}❌ Name must end with \`-dev\`, \`-staging\`, or \`-prod\`. Got: \`$RG_NAME\`\n"
-          fi
-
-          # Rule 4: No uppercase
-          if [[ "$RG_NAME" =~ [A-Z] ]]; then
-            ERRORS="${ERRORS}❌ Name must be lowercase. Got: \`$RG_NAME\`\n"
-          fi
-
-          # Rule 5: No generic names
-          if [[ "$RG_NAME" =~ (test|temp|my|resource1|example) ]]; then
-            ERRORS="${ERRORS}❌ Generic names not allowed (test, temp, my, resource1). Got: \`$RG_NAME\`\n"
-          fi
-
-          if [ -n "$ERRORS" ]; then
-            echo "naming_errors<<EOF" >> $GITHUB_OUTPUT
-            echo -e "$ERRORS" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            echo "naming_pass=false" >> $GITHUB_OUTPUT
-          else
-            echo "naming_pass=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: "🛡️ Azure Guard - Validate Region"
-        id: check-region
-        run: |
-          REGION="${{ steps.fields.outputs.region }}"
-          ALLOWED="eastus westus2 centralindia southeastasia westeurope"
-          ERRORS=""
-
-          if [[ ! " $ALLOWED " =~ " $REGION " ]]; then
-            ERRORS="❌ Region \`$REGION\` is not allowed. Allowed: \`$ALLOWED\`"
-          fi
-
-          if [ -n "$ERRORS" ]; then
-            echo "region_errors=$ERRORS" >> $GITHUB_OUTPUT
-            echo "region_pass=false" >> $GITHUB_OUTPUT
-          else
-            echo "region_pass=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: "🛡️ Azure Guard - Validate Owner"
-        id: check-owner
-        run: |
-          OWNER="${{ steps.fields.outputs.owner }}"
-          ERRORS=""
-
-          if [ -z "$OWNER" ]; then
-            ERRORS="❌ Owner field is required and cannot be empty"
-          fi
-
-          if [[ "$OWNER" =~ [A-Z] ]]; then
-            ERRORS="${ERRORS}\n❌ Owner must be lowercase. Got: \`$OWNER\`"
-          fi
-
-          if [ -n "$ERRORS" ]; then
-            echo "owner_errors<<EOF" >> $GITHUB_OUTPUT
-            echo -e "$ERRORS" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            echo "owner_pass=false" >> $GITHUB_OUTPUT
-          else
-            echo "owner_pass=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: "🛡️ Azure Guard - Validate Environment Consistency"
-        id: check-env
-        run: |
-          RG_NAME="${{ steps.fields.outputs.rg_name }}"
-          ENVIRONMENT="${{ steps.fields.outputs.environment }}"
-          ERRORS=""
-
-          # Environment in dropdown must match the suffix in the RG name
-          if [[ "$RG_NAME" == *"-dev" && "$ENVIRONMENT" != "dev" ]] || \
-             [[ "$RG_NAME" == *"-staging" && "$ENVIRONMENT" != "staging" ]] || \
-             [[ "$RG_NAME" == *"-prod" && "$ENVIRONMENT" != "production" && "$ENVIRONMENT" != "prod" ]]; then
-            ERRORS="❌ Environment mismatch: RG name ends with a different env than selected. Name: \`$RG_NAME\`, Selected: \`$ENVIRONMENT\`"
-          fi
-
-          if [ -n "$ERRORS" ]; then
-            echo "env_errors=$ERRORS" >> $GITHUB_OUTPUT
-            echo "env_pass=false" >> $GITHUB_OUTPUT
-          else
-            echo "env_pass=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: "🛡️ Azure Guard - Compliance Report (FAIL)"
-        if: steps.check-naming.outputs.naming_pass == 'false' || steps.check-region.outputs.region_pass == 'false' || steps.check-owner.outputs.owner_pass == 'false' || steps.check-env.outputs.env_pass == 'false'
+      - name: "🛡️ Comment - BLOCKED"
+        if: steps.guard.outputs.decision == 'FAIL'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
@@ -144,43 +127,22 @@ jobs:
 
             ### Status: ❌ BLOCKED
 
-            Your request does not meet compliance standards. Please fix the violations below and **create a new issue**.
+            ${{ steps.guard.outputs.report }}
 
             ---
+            > 🤖 This validation was performed by the Azure Guard AI agent.
+            > Rules are defined in `.github/agents/azure-guard.agent.md`
+            >
+            > Please fix the violations and create a new issue.
 
-            #### Naming Convention
-            ${{ steps.check-naming.outputs.naming_pass == 'true' && '✅ PASS' || steps.check-naming.outputs.naming_errors }}
-
-            **Required pattern:** `rg-<project>-<env>` where env is `dev`, `staging`, or `prod`
-            **Examples:** `rg-webapp-dev`, `rg-payments-prod`, `rg-analytics-staging`
-
-            ---
-
-            #### Region
-            ${{ steps.check-region.outputs.region_pass == 'true' && '✅ PASS' || steps.check-region.outputs.region_errors }}
-
-            ---
-
-            #### Owner
-            ${{ steps.check-owner.outputs.owner_pass == 'true' && '✅ PASS' || steps.check-owner.outputs.owner_errors }}
-
-            ---
-
-            #### Environment Consistency
-            ${{ steps.check-env.outputs.env_pass == 'true' && '✅ PASS' || steps.check-env.outputs.env_errors }}
-
-            ---
-
-            > 💡 **Tip:** The resource group name must end with the same environment you selected in the dropdown.
-
-      - name: "🛡️ Azure Guard - Block on failure"
-        if: steps.check-naming.outputs.naming_pass == 'false' || steps.check-region.outputs.region_pass == 'false' || steps.check-owner.outputs.owner_pass == 'false' || steps.check-env.outputs.env_pass == 'false'
+      - name: "Block on failure"
+        if: steps.guard.outputs.decision == 'FAIL'
         run: |
-          echo "::error::Azure Guard blocked this request due to compliance violations."
+          echo "::error::Azure Guard AI blocked this request."
           exit 1
 
-      - name: "🛡️ Azure Guard - Compliance Report (PASS)"
-        if: steps.check-naming.outputs.naming_pass == 'true' && steps.check-region.outputs.region_pass == 'true' && steps.check-owner.outputs.owner_pass == 'true' && steps.check-env.outputs.env_pass == 'true'
+      - name: "🛡️ Comment - PASSED"
+        if: steps.guard.outputs.decision == 'PASS'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
@@ -189,17 +151,14 @@ jobs:
 
             ### Status: ✅ PASSED
 
-            | Rule | Status |
-            |------|--------|
-            | Naming Convention | ✅ |
-            | Region Allowed | ✅ |
-            | Owner Valid | ✅ |
-            | Environment Consistency | ✅ |
+            ${{ steps.guard.outputs.report }}
 
-            Proceeding with resource creation...
+            ---
+            > 🤖 Validated by Azure Guard AI. Proceeding with resource creation...
 
   create-rg:
-    needs: validate
+    needs: azure-guard
+    if: needs.azure-guard.outputs.decision == 'PASS'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -213,17 +172,17 @@ jobs:
       - name: Create Resource Group
         run: |
           az group create \
-            --name "${{ needs.validate.outputs.rg_name }}" \
-            --location "${{ needs.validate.outputs.region }}" \
+            --name "${{ needs.azure-guard.outputs.rg_name }}" \
+            --location "${{ needs.azure-guard.outputs.region }}" \
             --tags \
-              environment="${{ needs.validate.outputs.environment }}" \
-              owner="${{ needs.validate.outputs.owner }}" \
-              project="$(echo ${{ needs.validate.outputs.rg_name }} | cut -d'-' -f2)" \
+              environment="${{ needs.azure-guard.outputs.environment }}" \
+              owner="${{ needs.azure-guard.outputs.owner }}" \
+              project="$(echo ${{ needs.azure-guard.outputs.rg_name }} | cut -d'-' -f2)" \
               cost-center="engineering" \
               created-by="github-actions" \
               issue-number="${{ github.event.issue.number }}"
 
-      - name: Comment on issue - Success
+      - name: Comment - Success
         if: success()
         uses: peter-evans/create-or-update-comment@v4
         with:
@@ -233,27 +192,22 @@ jobs:
             
             | Property | Value |
             |----------|-------|
-            | Name | `${{ needs.validate.outputs.rg_name }}` |
-            | Region | `${{ needs.validate.outputs.region }}` |
-            | Environment | `${{ needs.validate.outputs.environment }}` |
-            | Owner | `${{ needs.validate.outputs.owner }}` |
-            | Tags | environment, owner, project, cost-center, created-by |
-            
-            The resource group is now available in Azure.
+            | Name | `${{ needs.azure-guard.outputs.rg_name }}` |
+            | Region | `${{ needs.azure-guard.outputs.region }}` |
+            | Environment | `${{ needs.azure-guard.outputs.environment }}` |
+            | Owner | `${{ needs.azure-guard.outputs.owner }}` |
 
-      - name: Close issue on success
+      - name: Close issue
         if: success()
         uses: peter-evans/close-issue@v3
         with:
           issue-number: ${{ github.event.issue.number }}
-          comment: "Closing - resource group has been provisioned. ✅"
+          comment: "✅ Resource group provisioned and verified."
 
-      - name: Comment on issue - Failure
+      - name: Comment - Failure
         if: failure()
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
           body: |
-            ❌ **Failed to create Resource Group**
-            
-            Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+            ❌ **Azure deployment failed.** Check [logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
