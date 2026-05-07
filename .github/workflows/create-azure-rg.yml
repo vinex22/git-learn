@@ -1,5 +1,28 @@
+# =============================================================================
+# WORKFLOW: Azure Resource Group Creator (with AI Compliance Gate)
+# =============================================================================
+# This workflow automates Azure Resource Group provisioning via GitHub Issues.
+#
+# HOW IT WORKS:
+# 1. User opens an issue using the "Request Azure Resource Group" template
+# 2. The AI agent (Azure Guard) validates the request against rules in
+#    .github/agents/azure-guard.agent.md
+# 3. If PASS → creates the resource group in Azure and closes the issue
+# 4. If FAIL → posts a comment with violations and blocks creation
+#
+# RESUBMIT FLOW:
+# - User can edit the issue body to fix violations (auto re-triggers)
+# - Or comment "/revalidate" to manually re-trigger validation
+#
+# REQUIRED SECRETS:
+# - GH_MODELS_TOKEN: GitHub PAT with "models" permission (for AI API)
+# - AZURE_CREDENTIALS: Service principal JSON (for Azure CLI)
+# =============================================================================
+
 name: Create Azure Resource Group
 
+# --- TRIGGERS ---
+# Runs when: issue opened, issue edited, or someone comments "/revalidate"
 on:
   issues:
     types: [opened, edited]
@@ -7,33 +30,34 @@ on:
     types: [created]
 
 jobs:
+  # ===========================================================================
+  # JOB 1: AI COMPLIANCE GATE
+  # Validates the issue request against rules before allowing Azure deployment
+  # ===========================================================================
   azure-guard:
+    # Only run for issues with "azure" label, or /revalidate comments on azure issues
     if: |
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'azure')) ||
       (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'azure') && github.event.comment.body == '/revalidate')
     runs-on: ubuntu-latest
     permissions:
-      issues: write
-      contents: read
+      issues: write       # Needed to post comments on the issue
+      contents: read      # Needed to checkout repo and read rules file
+
+    # Expose values to Job 2 (create-rg)
     outputs:
       decision: ${{ steps.guard.outputs.decision }}
-      rg_name: ${{ steps.extract.outputs.rg_name }}
-      region: ${{ steps.extract.outputs.region }}
-      environment: ${{ steps.extract.outputs.environment }}
-      owner: ${{ steps.extract.outputs.owner }}
+      rg_name: ${{ steps.guard.outputs.rg_name }}
+      region: ${{ steps.guard.outputs.region }}
+      environment: ${{ steps.guard.outputs.environment }}
+      owner: ${{ steps.guard.outputs.owner }}
 
     steps:
+      # --- Clone the repo so we can read the rules file ---
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Read Azure Guard rules
-        id: rules
-        run: |
-          RULES=$(cat .github/agents/azure-guard.agent.md)
-          echo "rules<<EOF" >> $GITHUB_OUTPUT
-          echo "$RULES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
+      # --- Send the issue + rules to the AI for validation ---
       - name: "🛡️ Azure Guard - AI Validation"
         id: guard
         env:
@@ -41,43 +65,17 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
-          # Build the prompt for the AI agent
-          PROMPT=$(cat <<'PROMPT_END'
-          You are Azure Guard. You enforce the rules defined below.
-
-          ## RULES:
-          ${{ steps.rules.outputs.rules }}
-
-          ## ISSUE TO VALIDATE:
-          Title: ${ISSUE_TITLE}
-          Body:
-          ${ISSUE_BODY}
-
-          ## YOUR TASK:
-          1. Validate the issue inputs against ALL rules (naming, tags, region, security)
-          2. Return your response as JSON ONLY (no markdown, no explanation outside JSON):
-
-          {
-            "decision": "PASS" or "FAIL",
-            "report": "Your markdown compliance report with ✅/❌ for each rule",
-            "rg_name": "extracted resource group name",
-            "region": "extracted region",
-            "environment": "extracted environment",
-            "owner": "extracted owner",
-            "violations": ["list of violation descriptions"] or []
-          }
-
-          Return ONLY the JSON object. Nothing else.
-          PROMPT_END
-          )
-
-          # Call GitHub Models API (AI inference)
+          # ---------------------------------------------------------------
+          # Call GitHub Models API (GPT-4o-mini) to validate the request
+          # We send: the rules file + issue body as the prompt
+          # We expect: a JSON response with decision (PASS/FAIL) + details
+          # ---------------------------------------------------------------
           RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
             -H "Authorization: Bearer $GH_MODELS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg system "You are Azure Guard, a strict Azure compliance validator. Respond ONLY with valid JSON, no markdown fences. The issue form fields map to Azure tags as follows: Owner->owner, Project->project, Cost Center->cost-center, Environment->environment. The tags created-by and created-date are auto-set by the workflow. If all issue fields are filled and the naming convention is correct, return PASS." \
-              --arg user "$(echo -e "Validate this Azure resource group request.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nField-to-tag mapping: The issue form collects all required tag values. 'Owner' field = owner tag, 'Project' field = project tag, 'Cost Center' field = cost-center tag, 'Environment' field = environment tag. 'created-by' and 'created-date' are auto-set.\n\nOnly flag REAL violations: bad naming pattern, empty/missing fields, or security issues. If all fields are present and naming is correct, decision must be PASS.\n\nRespond with JSON only (no code fences): {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown compliance report\", \"rg_name\": \"the full rg name\", \"region\": \"extracted region\", \"environment\": \"extracted env\", \"owner\": \"extracted owner\", \"violations\": []}")" \
+              --arg system "You are Azure Guard, a strict Azure compliance validator. Respond ONLY with valid JSON (no markdown fences). The issue form fields map to Azure tags: Owner->owner, Project->project, Cost Center->cost-center, Environment->environment. Tags created-by and created-date are auto-set by the workflow. If all fields are filled and naming is correct, return PASS." \
+              --arg user "$(echo -e "Validate this Azure resource group request.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nField-to-tag mapping: Owner=owner tag, Project=project tag, Cost Center=cost-center tag, Environment=environment tag. created-by and created-date are auto-set.\n\nOnly flag REAL violations: bad naming, empty fields, forbidden words, or security issues.\n\nRespond with JSON only: {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown table\", \"rg_name\": \"full rg name\", \"region\": \"region\", \"environment\": \"env\", \"owner\": \"owner\", \"violations\": []}")" \
               '{
                 "model": "gpt-4o-mini",
                 "messages": [
@@ -88,43 +86,34 @@ jobs:
               }'
             )")
 
-          echo "Raw response: $RESPONSE"
-
-          # Extract the AI's JSON response
+          # ---------------------------------------------------------------
+          # Parse the AI response
+          # The API returns: { choices: [{ message: { content: "..." } }] }
+          # We extract the AI's text, strip code fences, then parse as JSON
+          # ---------------------------------------------------------------
           AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           echo "AI Reply: $AI_REPLY"
 
-          # Strip markdown code fences if present
+          # Strip markdown code fences (```json ... ```) if the AI added them
           AI_REPLY=$(echo "$AI_REPLY" | sed '/^```/d')
 
-          # Parse decision
-          DECISION=$(echo "$AI_REPLY" | jq -r '.decision')
+          # ---------------------------------------------------------------
+          # Extract fields from the AI's JSON and save as step outputs
+          # ---------------------------------------------------------------
+          echo "decision=$(echo "$AI_REPLY" | jq -r '.decision')" >> $GITHUB_OUTPUT
+          echo "rg_name=$(echo "$AI_REPLY" | jq -r '.rg_name')" >> $GITHUB_OUTPUT
+          echo "region=$(echo "$AI_REPLY" | jq -r '.region')" >> $GITHUB_OUTPUT
+          echo "environment=$(echo "$AI_REPLY" | jq -r '.environment')" >> $GITHUB_OUTPUT
+          echo "owner=$(echo "$AI_REPLY" | jq -r '.owner')" >> $GITHUB_OUTPUT
+
+          # Multi-line output for the report (can contain newlines)
           REPORT=$(echo "$AI_REPLY" | jq -r '.report')
-          RG_NAME=$(echo "$AI_REPLY" | jq -r '.rg_name')
-          REGION=$(echo "$AI_REPLY" | jq -r '.region')
-          ENVIRONMENT=$(echo "$AI_REPLY" | jq -r '.environment')
-          OWNER=$(echo "$AI_REPLY" | jq -r '.owner')
-
-          echo "decision=$DECISION" >> $GITHUB_OUTPUT
-          echo "rg_name=$RG_NAME" >> $GITHUB_OUTPUT
-          echo "region=$REGION" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-          echo "owner=$OWNER" >> $GITHUB_OUTPUT
-
-          # Save report for commenting
           echo "report<<EOF" >> $GITHUB_OUTPUT
           echo "$REPORT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Extract fields (fallback)
-        id: extract
-        run: |
-          echo "rg_name=${{ steps.guard.outputs.rg_name }}" >> $GITHUB_OUTPUT
-          echo "region=${{ steps.guard.outputs.region }}" >> $GITHUB_OUTPUT
-          echo "environment=${{ steps.guard.outputs.environment }}" >> $GITHUB_OUTPUT
-          echo "owner=${{ steps.guard.outputs.owner }}" >> $GITHUB_OUTPUT
-
-      - name: "🛡️ Comment - BLOCKED"
+      # --- If FAIL: post a BLOCKED comment with the violation details ---
+      - name: "❌ Comment - BLOCKED"
         if: steps.guard.outputs.decision == 'FAIL'
         uses: peter-evans/create-or-update-comment@v4
         with:
@@ -137,18 +126,19 @@ jobs:
             ${{ steps.guard.outputs.report }}
 
             ---
-            > 🤖 This validation was performed by the Azure Guard AI agent.
-            > Rules are defined in `.github/agents/azure-guard.agent.md`
+            > 🤖 Validated by Azure Guard AI | Rules: `.github/agents/azure-guard.agent.md`
             >
-            > Please fix the violations and create a new issue.
+            > **To fix:** Edit this issue with corrected values, or comment `/revalidate`.
 
+      # --- If FAIL: stop the workflow (prevents Job 2 from running) ---
       - name: "Block on failure"
         if: steps.guard.outputs.decision == 'FAIL'
         run: |
           echo "::error::Azure Guard AI blocked this request."
           exit 1
 
-      - name: "🛡️ Comment - PASSED"
+      # --- If PASS: post a success comment ---
+      - name: "✅ Comment - PASSED"
         if: steps.guard.outputs.decision == 'PASS'
         uses: peter-evans/create-or-update-comment@v4
         with:
@@ -163,19 +153,25 @@ jobs:
             ---
             > 🤖 Validated by Azure Guard AI. Proceeding with resource creation...
 
+  # ===========================================================================
+  # JOB 2: CREATE THE AZURE RESOURCE GROUP
+  # Only runs if Job 1 (azure-guard) returned PASS
+  # ===========================================================================
   create-rg:
-    needs: azure-guard
-    if: needs.azure-guard.outputs.decision == 'PASS'
+    needs: azure-guard                                    # Wait for Job 1
+    if: needs.azure-guard.outputs.decision == 'PASS'     # Only run on PASS
     runs-on: ubuntu-latest
     permissions:
-      issues: write
+      issues: write       # Needed to comment and close the issue
 
     steps:
+      # --- Authenticate with Azure using service principal ---
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # --- Create the resource group with all required tags ---
       - name: Create Resource Group
         run: |
           az group create \
@@ -189,14 +185,15 @@ jobs:
               created-by="github-actions" \
               issue-number="${{ github.event.issue.number }}"
 
-      - name: Comment - Success
+      # --- Post success comment with resource details ---
+      - name: "✅ Comment - Success"
         if: success()
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
           body: |
             ✅ **Resource Group Created Successfully!**
-            
+
             | Property | Value |
             |----------|-------|
             | Name | `${{ needs.azure-guard.outputs.rg_name }}` |
@@ -204,6 +201,7 @@ jobs:
             | Environment | `${{ needs.azure-guard.outputs.environment }}` |
             | Owner | `${{ needs.azure-guard.outputs.owner }}` |
 
+      # --- Close the issue (request fulfilled) ---
       - name: Close issue
         if: success()
         uses: peter-evans/close-issue@v3
@@ -211,10 +209,11 @@ jobs:
           issue-number: ${{ github.event.issue.number }}
           comment: "✅ Resource group provisioned and verified."
 
-      - name: Comment - Failure
+      # --- If Azure CLI fails, post error with link to logs ---
+      - name: "❌ Comment - Deployment Failed"
         if: failure()
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.issue.number }}
           body: |
-            ❌ **Azure deployment failed.** Check [logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+            ❌ **Azure deployment failed.** Check [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
