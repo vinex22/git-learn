@@ -51,7 +51,7 @@
 ```json
 {
   "decision": "PASS or FAIL",
-  "report": "markdown compliance table",
+  "report": "A markdown table (see format below)",
   "kv_name": "kv name from issue body",
   "rg_name": "rg name from issue body",
   "region": "azure region",
@@ -64,6 +64,36 @@
   "violations": []
 }
 ```
+
+## Report Format
+The `report` field MUST be a **markdown table**, not JSON. Use this exact format:
+
+### When PASS:
+```
+| Field | Value | Status |
+|-------|-------|--------|
+| KV Name | `kv-payments-dev` | ✅ Valid |
+| Resource Group | `rg-payments-dev` | ✅ Valid |
+| Region | `eastus` | ✅ Valid |
+| Environment | `dev` | ✅ Valid |
+| SKU | `standard` | ✅ Valid |
+| Purge Protection | `false` | ✅ Valid (dev) |
+| Public Access | `Enabled` | ✅ Valid (dev) |
+| Retention | `7` | ✅ Valid (dev) |
+| Owner | `vinayjain` | ✅ Valid |
+```
+
+### When FAIL:
+```
+| Field | Value | Status | Issue |
+|-------|-------|--------|-------|
+| KV Name | `MyVault` | ❌ Fail | Must match `kv-<project>-<env>` |
+| Purge Protection | `false` | ❌ Fail | Required in prod |
+| Public Access | `Enabled` | ❌ Fail | Must be Disabled in prod |
+| Retention | `30` | ❌ Fail | Must be 90 in prod |
+```
+
+Do NOT return JSON arrays, bullet lists, or raw objects in the report field.
 
 ## IMPORTANT
 - Extract values from the **issue body** fields, NOT the issue title

@@ -28,7 +28,7 @@
 ```json
 {
   "decision": "PASS or FAIL",
-  "report": "markdown compliance table",
+  "report": "A markdown table (see format below)",
   "rg_name": "the rg name from the issue body (NOT the title)",
   "region": "azure region",
   "environment": "dev/staging/prod",
@@ -36,6 +36,32 @@
   "violations": []
 }
 ```
+
+## Report Format
+The `report` field MUST be a **markdown table**, not JSON. Use this exact format:
+
+### When PASS:
+```
+| Field | Value | Status |
+|-------|-------|--------|
+| RG Name | `rg-payments-dev` | ✅ Valid |
+| Region | `eastus` | ✅ Valid |
+| Environment | `dev` | ✅ Valid |
+| Owner | `vinayjain` | ✅ Valid |
+| Project | `payments` | ✅ Valid |
+| Cost Center | `engineering` | ✅ Valid |
+```
+
+### When FAIL:
+```
+| Field | Value | Status | Issue |
+|-------|-------|--------|-------|
+| RG Name | `MyResourceGroup` | ❌ Fail | Must match `rg-<project>-<env>` |
+| Region | `eastus` | ✅ Valid | — |
+| Environment | `dev` | ✅ Valid | — |
+```
+
+Do NOT return JSON arrays, bullet lists, or raw objects in the report field.
 
 ## IMPORTANT
 - Extract the RG name from the **issue body** (Resource Group Name field), NOT the issue title
