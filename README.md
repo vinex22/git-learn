@@ -5,13 +5,15 @@ Self-service Azure Resource Group creation via GitHub Issues, with an AI-powered
 ## How It Works
 
 ```
-Open Issue → AI Validates → Creates Resource Group → Closes Issue
+Open Issue → AI Validates → Manual Approval → Creates Resource Group → Closes Issue
 ```
 
 1. You fill out an issue form requesting a new Resource Group
 2. An AI agent (**Azure Guard**) checks your request against compliance rules
-3. If it **passes** → the RG is created in Azure automatically
-4. If it **fails** → you get a comment explaining what to fix
+3. If it **passes** → a reviewer must **manually approve** before creation proceeds
+4. If **approved** → the RG is created in Azure automatically
+5. If **rejected** → a comment is posted on the issue explaining the rejection
+6. If the AI **fails** → you get a comment explaining what to fix
 
 ## Quick Start
 
@@ -33,10 +35,22 @@ Go to **Issues → New Issue → "Request Azure Resource Group"** and fill out t
 
 The workflow triggers automatically. Within ~30 seconds you'll see a comment:
 
-- **✅ PASSED** — Resource group creation proceeds
+- **✅ PASSED** — Workflow pauses for manual approval
 - **❌ BLOCKED** — Comment lists exactly what's wrong
 
-### 3. Fix & Resubmit (if blocked)
+### 3. Manual Approval (if AI passed)
+
+A designated reviewer must approve before the resource group is created:
+
+1. Go to the **Actions** tab and click the waiting run
+2. Click **"Review deployments"**
+3. Check the `azure-approval` environment
+4. Click **"Approve and deploy"** or **"Reject"**
+
+- **Approved** → resource group is created and issue is closed
+- **Rejected** → a rejection comment is posted on the issue
+
+### 4. Fix & Resubmit (if blocked)
 
 Two ways to retry:
 - **Edit the issue** body with corrected values (auto re-triggers)
