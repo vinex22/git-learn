@@ -141,6 +141,16 @@ ALL resources MUST have these tags:
 - ✅ Enable soft delete for blobs and containers
 - ✅ Disable shared key access in production (use AAD)
 
+### 3.6 — Key Vault Specific
+- ✅ RBAC authorization MUST be enabled (always, all environments)
+- ✅ Purge protection MUST be enabled in `staging` and `production`
+- ✅ Purge protection is recommended but optional in `dev`
+- ❌ Public network access MUST be `Disabled` in `production`
+- ✅ Public network access is allowed in `dev` and `staging`
+- ✅ Soft delete retention MUST be 90 days in `production`
+- ✅ Soft delete retention MUST be at least 7 days in `dev` and `staging`
+- ❌ `enable-for-deployment`, `enable-for-disk-encryption`, `enable-for-template-deployment` must NOT all be true simultaneously in production (least privilege)
+
 ---
 
 ## Rule 4: Environment-Specific Rules

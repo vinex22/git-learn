@@ -45,6 +45,9 @@ jobs:
       environment: ${{ steps.guard.outputs.environment }}
       owner: ${{ steps.guard.outputs.owner }}
       sku: ${{ steps.guard.outputs.sku }}
+      purge_protection: ${{ steps.guard.outputs.purge_protection }}
+      public_network_access: ${{ steps.guard.outputs.public_network_access }}
+      soft_delete_retention: ${{ steps.guard.outputs.soft_delete_retention }}
 
     steps:
       - name: Checkout repo
@@ -61,8 +64,8 @@ jobs:
             -H "Authorization: Bearer $GH_MODELS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg system "You are Azure Guard, a strict Azure compliance validator. Respond ONLY with valid JSON (no markdown fences). The issue form fields map to Azure tags: Owner->owner, Project->project, Cost Center->cost-center, Environment->environment. Tags created-by and created-date are auto-set by the workflow. If all fields are filled and naming is correct, return PASS. Owner values like 'vinayjain' or 'team-platform' are valid lowercase strings - do NOT flag them. Key Vault naming: kv-<project>-<env>. Resource Group naming: rg-<project>-<env>." \
-              --arg user "$(echo -e "Validate this Azure Key Vault request.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nField-to-tag mapping: Owner=owner tag, Project=project tag, Cost Center=cost-center tag, Environment=environment tag. created-by and created-date are auto-set.\n\nOnly flag REAL violations: bad naming, empty fields, forbidden words, or security issues. A username like 'vinayjain' IS valid lowercase.\n\nRespond with JSON only: {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown table\", \"kv_name\": \"full kv name\", \"rg_name\": \"resource group name from issue\", \"region\": \"region\", \"environment\": \"env\", \"owner\": \"owner\", \"sku\": \"standard or premium\", \"violations\": []}")" \
+              --arg system "You are Azure Guard, a strict Azure compliance validator. Respond ONLY with valid JSON (no markdown fences). The issue form fields map to Azure tags: Owner->owner, Project->project, Cost Center->cost-center, Environment->environment. Tags created-by and created-date are auto-set by the workflow. If all fields are filled and naming is correct, return PASS. Owner values like 'vinayjain' or 'team-platform' are valid lowercase strings - do NOT flag them. Key Vault naming: kv-<project>-<env>. Resource Group naming: rg-<project>-<env>. KEY VAULT SECURITY RULES: RBAC authorization must always be enabled. Purge protection must be enabled in staging/production. Public network access must be Disabled in production. Soft delete retention must be 90 days in production, at least 7 in dev/staging." \
+              --arg user "$(echo -e "Validate this Azure Key Vault request.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nField-to-tag mapping: Owner=owner tag, Project=project tag, Cost Center=cost-center tag, Environment=environment tag. created-by and created-date are auto-set.\n\nOnly flag REAL violations: bad naming, empty fields, forbidden words, or security issues. A username like 'vinayjain' IS valid lowercase.\n\nRespond with JSON only: {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown table\", \"kv_name\": \"full kv name\", \"rg_name\": \"resource group name from issue\", \"region\": \"region\", \"environment\": \"env\", \"owner\": \"owner\", \"sku\": \"standard or premium\", \"purge_protection\": \"true or false\", \"public_network_access\": \"Enabled or Disabled\", \"soft_delete_retention\": \"number of days\", \"violations\": []}")" \
               '{
                 "model": "gpt-4o",
                 "messages": [
@@ -84,6 +87,9 @@ jobs:
           echo "environment=$(echo "$AI_REPLY" | jq -r '.environment')" >> $GITHUB_OUTPUT
           echo "owner=$(echo "$AI_REPLY" | jq -r '.owner')" >> $GITHUB_OUTPUT
           echo "sku=$(echo "$AI_REPLY" | jq -r '.sku')" >> $GITHUB_OUTPUT
+          echo "purge_protection=$(echo "$AI_REPLY" | jq -r '.purge_protection')" >> $GITHUB_OUTPUT
+          echo "public_network_access=$(echo "$AI_REPLY" | jq -r '.public_network_access')" >> $GITHUB_OUTPUT
+          echo "soft_delete_retention=$(echo "$AI_REPLY" | jq -r '.soft_delete_retention')" >> $GITHUB_OUTPUT
 
           REPORT=$(echo "$AI_REPLY" | jq -r '.report')
           echo "report<<EOF" >> $GITHUB_OUTPUT
@@ -202,12 +208,21 @@ jobs:
       - name: Create Key Vault
         id: create
         run: |
+          # Build purge-protection flag (--enable-purge-protection has no =false form)
+          PURGE_FLAG=""
+          if [ "${{ needs.azure-guard.outputs.purge_protection }}" = "true" ]; then
+            PURGE_FLAG="--enable-purge-protection"
+          fi
+
           RESULT=$(az keyvault create \
             --name "${{ needs.azure-guard.outputs.kv_name }}" \
             --resource-group "${{ needs.azure-guard.outputs.rg_name }}" \
             --location "${{ needs.azure-guard.outputs.region }}" \
             --sku "${{ needs.azure-guard.outputs.sku }}" \
             --enable-rbac-authorization true \
+            $PURGE_FLAG \
+            --public-network-access "${{ needs.azure-guard.outputs.public_network_access }}" \
+            --retention-days "${{ needs.azure-guard.outputs.soft_delete_retention }}" \
             --tags \
               environment="${{ needs.azure-guard.outputs.environment }}" \
               owner="${{ needs.azure-guard.outputs.owner }}" \
@@ -240,6 +255,9 @@ jobs:
             | Vault URI | `${{ steps.create.outputs.vault_uri }}` |
             | Resource ID | `${{ steps.create.outputs.resource_id }}` |
             | RBAC Authorization | Enabled |
+            | Purge Protection | `${{ needs.azure-guard.outputs.purge_protection }}` |
+            | Public Network Access | `${{ needs.azure-guard.outputs.public_network_access }}` |
+            | Soft Delete Retention | `${{ needs.azure-guard.outputs.soft_delete_retention }}` days |
 
             🔗 [View in Azure Portal](https://portal.azure.com/#@/resource${{ steps.create.outputs.resource_id }})
 

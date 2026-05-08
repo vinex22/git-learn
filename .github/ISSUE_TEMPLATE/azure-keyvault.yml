@@ -56,6 +56,42 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: purge-protection
+    attributes:
+      label: Purge Protection
+      description: "Required for staging/production. Prevents permanent deletion during retention period"
+      options:
+        - "true"
+        - "false"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: public-network-access
+    attributes:
+      label: Public Network Access
+      description: "Must be Disabled for production environments"
+      options:
+        - Enabled
+        - Disabled
+    validations:
+      required: true
+
+  - type: dropdown
+    id: soft-delete-retention
+    attributes:
+      label: Soft Delete Retention (days)
+      description: "Must be 90 for production. Minimum 7 for dev/staging"
+      options:
+        - "7"
+        - "14"
+        - "30"
+        - "60"
+        - "90"
+    validations:
+      required: true
+
   - type: input
     id: owner
     attributes:
