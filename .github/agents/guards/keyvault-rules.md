@@ -28,11 +28,8 @@
 ## Validation Checklist
 1. KV name matches `kv-<project>-<env>` pattern
 2. RG name matches `rg-<project>-<env>` pattern
-3. `<project>` is lowercase, alphanumeric, max 15 chars
-4. `<env>` is one of: `dev`, `staging`, `prod`
-5. All required tags provided (owner, project, cost-center, environment)
-6. No forbidden words
-7. Security rules match the environment (see above)
+3. All shared rules pass (naming, tags, forbidden words — see shared-rules.md)
+4. Security rules match the environment (see above)
 
 ## Examples
 

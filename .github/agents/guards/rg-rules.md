@@ -6,10 +6,7 @@
 
 ## Validation Checklist
 1. Name matches `rg-<project>-<env>` pattern exactly
-2. `<project>` is lowercase, alphanumeric, max 15 chars
-3. `<env>` is one of: `dev`, `staging`, `prod`
-4. All required tags are provided (owner, project, cost-center, environment)
-5. No forbidden words (devil, test, temp, myresource)
+2. All shared rules pass (naming, tags, forbidden words — see shared-rules.md)
 
 ## Examples
 
