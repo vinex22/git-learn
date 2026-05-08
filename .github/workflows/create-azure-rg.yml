@@ -172,6 +172,33 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # --- Check if the resource group already exists ---
+      - name: Check if RG exists
+        id: check
+        run: |
+          if az group show --name "${{ needs.azure-guard.outputs.rg_name }}" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # --- If RG already exists, post a comment and skip creation ---
+      - name: "⚠️ Comment - RG Already Exists"
+        if: steps.check.outputs.exists == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ⚠️ **Resource group `${{ needs.azure-guard.outputs.rg_name }}` already exists in Azure.**
+
+            No changes were made. If you need a new resource group, use a different name.
+
+      - name: "Block if exists"
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          echo "::error::Resource group already exists."
+          exit 1
+
       # --- Create the resource group with all required tags ---
       - name: Create Resource Group
         id: create
