@@ -231,3 +231,33 @@ jobs:
           issue-number: ${{ github.event.issue.number }}
           body: |
             ❌ **Azure deployment failed.** Check [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+  # ===========================================================================
+  # JOB 3: NOTIFY ON REJECTION
+  # Posts a comment if the manual approval was rejected
+  # ===========================================================================
+  notify-rejection:
+    needs: [azure-guard, create-rg]
+    if: always() && needs.azure-guard.result == 'success' && needs.create-rg.result != 'success' && needs.create-rg.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: "🚫 Comment - Approval Rejected"
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🚫 Deployment Rejected
+
+            A reviewer **rejected** the manual approval for this resource group request.
+
+            | Property | Value |
+            |----------|-------|
+            | Resource Group | `${{ needs.azure-guard.outputs.rg_name }}` |
+            | Region | `${{ needs.azure-guard.outputs.region }}` |
+            | Reviewer Action | Rejected |
+
+            ---
+            > To retry, comment `/revalidate` after discussing with the reviewer.
