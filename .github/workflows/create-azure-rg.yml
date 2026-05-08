@@ -161,6 +161,7 @@ jobs:
     needs: azure-guard                                    # Wait for Job 1
     if: needs.azure-guard.outputs.decision == 'PASS'     # Only run on PASS
     runs-on: ubuntu-latest
+    environment: azure-approval                           # Requires manual approval
     permissions:
       issues: write       # Needed to comment and close the issue
 
