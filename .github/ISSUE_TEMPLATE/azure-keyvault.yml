@@ -1,0 +1,95 @@
+name: Request Azure Key Vault
+description: Create a new Azure Key Vault in an existing Resource Group
+title: "[KV Request]: "
+labels: ["infrastructure", "azure-kv"]
+body:
+  - type: input
+    id: kv-name
+    attributes:
+      label: Key Vault Name
+      placeholder: "kv-myproject-dev"
+      description: "Use format: kv-<project>-<environment>"
+    validations:
+      required: true
+
+  - type: input
+    id: resource-group
+    attributes:
+      label: Resource Group
+      placeholder: "rg-myproject-dev"
+      description: "The resource group must already exist in Azure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Azure Region
+      options:
+        - eastus
+        - westus2
+        - centralindia
+        - southeastasia
+        - westeurope
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - dev
+        - staging
+        - production
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sku
+    attributes:
+      label: SKU
+      description: "Standard for most workloads, Premium for HSM-backed keys"
+      options:
+        - standard
+        - premium
+    validations:
+      required: true
+
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      placeholder: "team-name or your-name"
+    validations:
+      required: true
+
+  - type: input
+    id: project
+    attributes:
+      label: Project
+      placeholder: "webapp"
+      description: "Project name (lowercase, alphanumeric, max 15 chars)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cost-center
+    attributes:
+      label: Cost Center
+      options:
+        - engineering
+        - marketing
+        - operations
+        - finance
+        - research
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      placeholder: "Why do you need this Key Vault?"
+    validations:
+      required: true

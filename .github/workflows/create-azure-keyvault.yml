@@ -1,0 +1,271 @@
+# =============================================================================
+# WORKFLOW: Azure Key Vault Creator (with AI Compliance Gate)
+# =============================================================================
+# This workflow automates Azure Key Vault provisioning via GitHub Issues.
+#
+# HOW IT WORKS:
+# 1. User opens an issue using the "Request Azure Key Vault" template
+# 2. The AI agent (Azure Guard) validates the request against rules
+# 3. Manual approval gate via the "azure-approval" environment
+# 4. Verifies the target Resource Group exists in Azure
+# 5. If all checks pass → creates the Key Vault and closes the issue
+#
+# REQUIRED SECRETS:
+# - GH_MODELS_TOKEN: GitHub PAT with "models" permission (for AI API)
+# - AZURE_CREDENTIALS: Service principal JSON (for Azure CLI)
+# =============================================================================
+
+name: Create Azure Key Vault
+
+# --- TRIGGERS ---
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+jobs:
+  # ===========================================================================
+  # JOB 1: AI COMPLIANCE GATE
+  # ===========================================================================
+  azure-guard:
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'azure-kv')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'azure-kv') && github.event.comment.body == '/revalidate')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    outputs:
+      decision: ${{ steps.guard.outputs.decision }}
+      kv_name: ${{ steps.guard.outputs.kv_name }}
+      rg_name: ${{ steps.guard.outputs.rg_name }}
+      region: ${{ steps.guard.outputs.region }}
+      environment: ${{ steps.guard.outputs.environment }}
+      owner: ${{ steps.guard.outputs.owner }}
+      sku: ${{ steps.guard.outputs.sku }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: "🛡️ Azure Guard - AI Validation"
+        id: guard
+        env:
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
+            -H "Authorization: Bearer $GH_MODELS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg system "You are Azure Guard, a strict Azure compliance validator. Respond ONLY with valid JSON (no markdown fences). The issue form fields map to Azure tags: Owner->owner, Project->project, Cost Center->cost-center, Environment->environment. Tags created-by and created-date are auto-set by the workflow. If all fields are filled and naming is correct, return PASS. Owner values like 'vinayjain' or 'team-platform' are valid lowercase strings - do NOT flag them. Key Vault naming: kv-<project>-<env>. Resource Group naming: rg-<project>-<env>." \
+              --arg user "$(echo -e "Validate this Azure Key Vault request.\n\nRULES FILE:\n$(cat .github/agents/azure-guard.agent.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY\n\nField-to-tag mapping: Owner=owner tag, Project=project tag, Cost Center=cost-center tag, Environment=environment tag. created-by and created-date are auto-set.\n\nOnly flag REAL violations: bad naming, empty fields, forbidden words, or security issues. A username like 'vinayjain' IS valid lowercase.\n\nRespond with JSON only: {\"decision\": \"PASS\" or \"FAIL\", \"report\": \"markdown table\", \"kv_name\": \"full kv name\", \"rg_name\": \"resource group name from issue\", \"region\": \"region\", \"environment\": \"env\", \"owner\": \"owner\", \"sku\": \"standard or premium\", \"violations\": []}")" \
+              '{
+                "model": "gpt-4o",
+                "messages": [
+                  {"role": "system", "content": $system},
+                  {"role": "user", "content": $user}
+                ],
+                "temperature": 0
+              }'
+            )")
+
+          AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          echo "AI Reply: $AI_REPLY"
+          AI_REPLY=$(echo "$AI_REPLY" | sed '/^```/d')
+
+          echo "decision=$(echo "$AI_REPLY" | jq -r '.decision')" >> $GITHUB_OUTPUT
+          echo "kv_name=$(echo "$AI_REPLY" | jq -r '.kv_name')" >> $GITHUB_OUTPUT
+          echo "rg_name=$(echo "$AI_REPLY" | jq -r '.rg_name')" >> $GITHUB_OUTPUT
+          echo "region=$(echo "$AI_REPLY" | jq -r '.region')" >> $GITHUB_OUTPUT
+          echo "environment=$(echo "$AI_REPLY" | jq -r '.environment')" >> $GITHUB_OUTPUT
+          echo "owner=$(echo "$AI_REPLY" | jq -r '.owner')" >> $GITHUB_OUTPUT
+          echo "sku=$(echo "$AI_REPLY" | jq -r '.sku')" >> $GITHUB_OUTPUT
+
+          REPORT=$(echo "$AI_REPLY" | jq -r '.report')
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: "❌ Comment - BLOCKED"
+        if: steps.guard.outputs.decision == 'FAIL'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🛡️ Azure Guard — Compliance Report
+
+            ### Status: ❌ BLOCKED
+
+            ${{ steps.guard.outputs.report }}
+
+            ---
+            > 🤖 Validated by Azure Guard AI | Rules: `.github/agents/azure-guard.agent.md`
+            >
+            > **To fix:** Edit this issue with corrected values, or comment `/revalidate`.
+
+      - name: "Block on failure"
+        if: steps.guard.outputs.decision == 'FAIL'
+        run: |
+          echo "::error::Azure Guard AI blocked this request."
+          exit 1
+
+      - name: "✅ Comment - PASSED"
+        if: steps.guard.outputs.decision == 'PASS'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🛡️ Azure Guard — Compliance Report
+
+            ### Status: ✅ PASSED
+
+            ${{ steps.guard.outputs.report }}
+
+            ---
+            > 🤖 Validated by Azure Guard AI. Proceeding to approval...
+
+  # ===========================================================================
+  # JOB 2: CREATE THE AZURE KEY VAULT
+  # Checks: RG exists → KV doesn't already exist → creates KV
+  # ===========================================================================
+  create-kv:
+    needs: azure-guard
+    if: needs.azure-guard.outputs.decision == 'PASS'
+    runs-on: ubuntu-latest
+    environment: azure-approval
+    permissions:
+      issues: write
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # --- Verify the target Resource Group exists ---
+      - name: Check if Resource Group exists
+        id: check-rg
+        run: |
+          if az group show --name "${{ needs.azure-guard.outputs.rg_name }}" &>/dev/null; then
+            echo "rg_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "rg_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "❌ Comment - RG Not Found"
+        if: steps.check-rg.outputs.rg_exists == 'false'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ❌ **Resource group `${{ needs.azure-guard.outputs.rg_name }}` does not exist in Azure.**
+
+            Please create the resource group first using the [RG Request template](../../issues/new?template=azure-rg.yml), then retry this request.
+
+      - name: "Block if RG missing"
+        if: steps.check-rg.outputs.rg_exists == 'false'
+        run: |
+          echo "::error::Target resource group does not exist."
+          exit 1
+
+      # --- Check if the Key Vault already exists ---
+      - name: Check if Key Vault exists
+        id: check-kv
+        run: |
+          if az keyvault show --name "${{ needs.azure-guard.outputs.kv_name }}" --resource-group "${{ needs.azure-guard.outputs.rg_name }}" &>/dev/null; then
+            echo "kv_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "kv_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "⚠️ Comment - KV Already Exists"
+        if: steps.check-kv.outputs.kv_exists == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ⚠️ **Key Vault `${{ needs.azure-guard.outputs.kv_name }}` already exists in resource group `${{ needs.azure-guard.outputs.rg_name }}`.**
+
+            No changes were made. If you need a new Key Vault, use a different name.
+
+      - name: "Block if KV exists"
+        if: steps.check-kv.outputs.kv_exists == 'true'
+        run: |
+          echo "::error::Key Vault already exists."
+          exit 1
+
+      # --- Create the Key Vault ---
+      - name: Create Key Vault
+        id: create
+        run: |
+          RESULT=$(az keyvault create \
+            --name "${{ needs.azure-guard.outputs.kv_name }}" \
+            --resource-group "${{ needs.azure-guard.outputs.rg_name }}" \
+            --location "${{ needs.azure-guard.outputs.region }}" \
+            --sku "${{ needs.azure-guard.outputs.sku }}" \
+            --enable-rbac-authorization true \
+            --tags \
+              environment="${{ needs.azure-guard.outputs.environment }}" \
+              owner="${{ needs.azure-guard.outputs.owner }}" \
+              project="$(echo ${{ needs.azure-guard.outputs.kv_name }} | cut -d'-' -f2)" \
+              cost-center="engineering" \
+              created-by="github-actions" \
+              created-date="$(date -u +%Y-%m-%d)" \
+              issue-number="${{ github.event.issue.number }}")
+
+          echo "resource_id=$(echo "$RESULT" | jq -r '.id')" >> $GITHUB_OUTPUT
+          echo "vault_uri=$(echo "$RESULT" | jq -r '.properties.vaultUri')" >> $GITHUB_OUTPUT
+          echo "subscription=$(echo "$RESULT" | jq -r '.id' | cut -d'/' -f3)" >> $GITHUB_OUTPUT
+
+      - name: "✅ Comment - Success"
+        if: success()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ✅ **Key Vault Created Successfully!**
+
+            | Property | Value |
+            |----------|-------|
+            | Name | `${{ needs.azure-guard.outputs.kv_name }}` |
+            | Resource Group | `${{ needs.azure-guard.outputs.rg_name }}` |
+            | Region | `${{ needs.azure-guard.outputs.region }}` |
+            | SKU | `${{ needs.azure-guard.outputs.sku }}` |
+            | Environment | `${{ needs.azure-guard.outputs.environment }}` |
+            | Owner | `${{ needs.azure-guard.outputs.owner }}` |
+            | Vault URI | `${{ steps.create.outputs.vault_uri }}` |
+            | Resource ID | `${{ steps.create.outputs.resource_id }}` |
+            | RBAC Authorization | Enabled |
+
+            🔗 [View in Azure Portal](https://portal.azure.com/#@/resource${{ steps.create.outputs.resource_id }})
+
+      - name: Close issue
+        if: success()
+        uses: peter-evans/close-issue@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+
+  # ===========================================================================
+  # JOB 3: NOTIFY IF APPROVAL WAS REJECTED
+  # ===========================================================================
+  notify-rejection:
+    needs: [azure-guard, create-kv]
+    if: always() && needs.azure-guard.result == 'success' && needs.create-kv.result != 'success' && needs.create-kv.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: "🚫 Comment - Approval Rejected"
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            🚫 **Key Vault creation was not approved.**
+
+            The request passed AI validation but was rejected during manual approval.
+            If you believe this was a mistake, contact the approver or comment `/revalidate` to restart the process.
