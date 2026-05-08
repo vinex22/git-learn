@@ -130,7 +130,27 @@ gh label create azure --color 0075ca --description "Azure resource request"
 gh label create infrastructure --color d4c5f9 --description "Infrastructure provisioning"
 ```
 
-### 4. That's It
+### 4. Create the Approval Environment
+
+The workflow requires a manual approval before creating resources. Set up the `azure-approval` environment:
+
+1. Go to **Settings → Environments → New environment**
+2. Name it `azure-approval`
+3. Check **Required reviewers** and add the users who can approve deployments
+4. Click **Save protection rules**
+
+Or create it via CLI:
+
+```bash
+# Get your GitHub user ID
+USER_ID=$(gh api user --jq '.id')
+
+# Create the environment with yourself as a required reviewer
+echo "{\"wait_timer\":0,\"prevent_self_review\":false,\"reviewers\":[{\"type\":\"User\",\"id\":$USER_ID}]}" \
+  | gh api repos/<OWNER>/<REPO>/environments/azure-approval -X PUT --input -
+```
+
+### 5. That's It
 
 The workflow, issue template, and AI rules are already in the repo. Open an issue to test.
 
