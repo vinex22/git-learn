@@ -1,0 +1,253 @@
+# =============================================================================
+# WORKFLOW: Azure Resource Group Creator — Terraform Edition
+# =============================================================================
+# Same AI compliance gate as the CLI version, but uses Terraform to provision.
+# State is stored in Azure Storage (rg-tfstate / sttfstateagtkhe / tfstate).
+#
+# REQUIRED SECRETS:
+# - GH_MODELS_TOKEN: GitHub PAT with "models" permission (for AI API)
+# - ARM_CLIENT_ID, ARM_CLIENT_SECRET, ARM_SUBSCRIPTION_ID, ARM_TENANT_ID
+# =============================================================================
+
+name: Create Azure RG (Terraform)
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+jobs:
+  # ===========================================================================
+  # JOB 1: AI COMPLIANCE GATE
+  # ===========================================================================
+  azure-guard:
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'azure-tf')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'azure-tf') && github.event.comment.body == '/revalidate')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    outputs:
+      decision: ${{ steps.guard.outputs.decision }}
+      rg_name: ${{ steps.guard.outputs.rg_name }}
+      region: ${{ steps.guard.outputs.region }}
+      environment: ${{ steps.guard.outputs.environment }}
+      owner: ${{ steps.guard.outputs.owner }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: "🛡️ Azure Guard - AI Validation"
+        id: guard
+        env:
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
+            -H "Authorization: Bearer $GH_MODELS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg system "You are Azure Guard, a strict Azure compliance validator for Resource Groups. Respond ONLY with valid JSON (no markdown fences). The 'report' field MUST be a markdown table (see Report Format in rules), never JSON arrays or bullet lists. Extract all values from the ISSUE BODY fields, not the title. Tags created-by and created-date are auto-set by the workflow — do NOT flag them as missing. Owner values like 'vinayjain' or 'ankur' are valid lowercase strings. If all fields are filled and naming is correct, return PASS. Do NOT invent violations." \
+              --arg user "$(echo -e "Validate this Azure resource group request.\n\nSHARED RULES:\n$(cat .github/agents/guards/shared-rules.md)\n\nRESOURCE GROUP RULES:\n$(cat .github/agents/guards/rg-rules.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY")" \
+              '{
+                "model": "gpt-4o",
+                "messages": [
+                  {"role": "system", "content": $system},
+                  {"role": "user", "content": $user}
+                ],
+                "temperature": 0
+              }'
+            )")
+
+          AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          echo "AI Reply: $AI_REPLY"
+          AI_REPLY=$(echo "$AI_REPLY" | sed '/^```/d')
+
+          echo "decision=$(echo "$AI_REPLY" | jq -r '.decision')" >> $GITHUB_OUTPUT
+          echo "rg_name=$(echo "$AI_REPLY" | jq -r '.rg_name')" >> $GITHUB_OUTPUT
+          echo "region=$(echo "$AI_REPLY" | jq -r '.region')" >> $GITHUB_OUTPUT
+          echo "environment=$(echo "$AI_REPLY" | jq -r '.environment')" >> $GITHUB_OUTPUT
+          echo "owner=$(echo "$AI_REPLY" | jq -r '.owner')" >> $GITHUB_OUTPUT
+
+          REPORT=$(echo "$AI_REPLY" | jq -r '.report')
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: "❌ Comment - BLOCKED"
+        if: steps.guard.outputs.decision == 'FAIL'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🛡️ Azure Guard — Compliance Report
+
+            ### Status: ❌ BLOCKED
+
+            ${{ steps.guard.outputs.report }}
+
+            ---
+            > 🤖 Validated by Azure Guard AI | Rules: `.github/agents/guards/rg-rules.md`
+            >
+            > **To fix:** Edit this issue with corrected values, or comment `/revalidate`.
+
+      - name: "Block on failure"
+        if: steps.guard.outputs.decision == 'FAIL'
+        run: |
+          echo "::error::Azure Guard AI blocked this request."
+          exit 1
+
+      - name: "✅ Comment - PASSED"
+        if: steps.guard.outputs.decision == 'PASS'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🛡️ Azure Guard — Compliance Report
+
+            ### Status: ✅ PASSED
+
+            ${{ steps.guard.outputs.report }}
+
+            ---
+            > 🤖 Validated by Azure Guard AI. Proceeding with Terraform deployment...
+
+  # ===========================================================================
+  # JOB 2: TERRAFORM PLAN + APPLY
+  # ===========================================================================
+  terraform-apply:
+    needs: azure-guard
+    if: needs.azure-guard.outputs.decision == 'PASS'
+    runs-on: ubuntu-latest
+    environment: azure-approval
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9"
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/rg
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform/rg
+        run: |
+          terraform plan -no-color \
+            -var="rg_name=${{ needs.azure-guard.outputs.rg_name }}" \
+            -var="region=${{ needs.azure-guard.outputs.region }}" \
+            -var="environment=${{ needs.azure-guard.outputs.environment }}" \
+            -var="owner=${{ needs.azure-guard.outputs.owner }}" \
+            -var="project=$(echo '${{ needs.azure-guard.outputs.rg_name }}' | cut -d'-' -f2)" \
+            -var="cost_center=engineering" \
+            -var="issue_number=${{ github.event.issue.number }}" \
+            -out=tfplan 2>&1 | tee plan_output.txt
+
+          # Save plan summary for the comment
+          PLAN_SUMMARY=$(grep -E "Plan:|No changes" plan_output.txt | head -1)
+          echo "plan_summary=$PLAN_SUMMARY" >> $GITHUB_OUTPUT
+
+      - name: "📋 Comment - Terraform Plan"
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 📋 Terraform Plan
+
+            **Tool:** Terraform v1.9
+            **Plan:** `${{ steps.plan.outputs.plan_summary }}`
+
+            Applying now...
+
+      - name: Terraform Apply
+        id: apply
+        working-directory: terraform/rg
+        run: |
+          terraform apply -no-color tfplan 2>&1 | tee apply_output.txt
+
+          # Capture outputs
+          echo "resource_id=$(terraform output -raw resource_group_id)" >> $GITHUB_OUTPUT
+          echo "rg_location=$(terraform output -raw resource_group_location)" >> $GITHUB_OUTPUT
+
+      - name: "✅ Comment - Success"
+        if: success()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ✅ **Resource Group Created via Terraform!**
+
+            | Property | Value |
+            |----------|-------|
+            | Name | `${{ needs.azure-guard.outputs.rg_name }}` |
+            | Region | `${{ needs.azure-guard.outputs.region }}` |
+            | Environment | `${{ needs.azure-guard.outputs.environment }}` |
+            | Owner | `${{ needs.azure-guard.outputs.owner }}` |
+            | Resource ID | `${{ steps.apply.outputs.resource_id }}` |
+            | Provisioned By | Terraform |
+
+            🔗 [View in Azure Portal](https://portal.azure.com/#@/resource${{ steps.apply.outputs.resource_id }})
+
+      - name: Close issue
+        if: success()
+        uses: peter-evans/close-issue@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          comment: "✅ Resource group provisioned via Terraform."
+
+      - name: "❌ Comment - Terraform Failed"
+        if: failure()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ❌ **Terraform deployment failed.** Check [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+  # ===========================================================================
+  # JOB 3: NOTIFY ON REJECTION
+  # ===========================================================================
+  notify-rejection:
+    needs: [azure-guard, terraform-apply]
+    if: always() && needs.azure-guard.result == 'success' && needs.terraform-apply.result != 'success' && needs.terraform-apply.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: "🚫 Comment - Approval Rejected"
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🚫 Deployment Rejected
+
+            A reviewer **rejected** the manual approval for this Terraform resource group request.
+
+            | Property | Value |
+            |----------|-------|
+            | Resource Group | `${{ needs.azure-guard.outputs.rg_name }}` |
+            | Region | `${{ needs.azure-guard.outputs.region }}` |
+            | Reviewer Action | Rejected |
+
+            ---
+            > To retry, comment `/revalidate` after discussing with the reviewer.

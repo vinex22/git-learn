@@ -1,0 +1,75 @@
+name: Request Azure Resource Group (Terraform)
+description: Create a new Azure Resource Group using Terraform
+title: "[TF-RG Request]: "
+labels: ["infrastructure", "azure-tf"]
+body:
+  - type: input
+    id: rg-name
+    attributes:
+      label: Resource Group Name
+      placeholder: "rg-myproject-dev"
+      description: "Use format: rg-<project>-<environment>"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Azure Region
+      options:
+        - eastus
+        - westus2
+        - centralindia
+        - southeastasia
+        - westeurope
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - dev
+        - staging
+        - prod
+    validations:
+      required: true
+
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      placeholder: "team-name or your-name"
+    validations:
+      required: true
+
+  - type: input
+    id: project
+    attributes:
+      label: Project
+      placeholder: "webapp"
+      description: "Project name (lowercase, alphanumeric, max 15 chars)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cost-center
+    attributes:
+      label: Cost Center
+      options:
+        - engineering
+        - marketing
+        - operations
+        - finance
+        - research
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      placeholder: "Why do you need this resource group?"
+    validations:
+      required: true
