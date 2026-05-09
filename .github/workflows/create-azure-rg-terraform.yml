@@ -36,6 +36,7 @@ jobs:
       region: ${{ steps.guard.outputs.region }}
       environment: ${{ steps.guard.outputs.environment }}
       owner: ${{ steps.guard.outputs.owner }}
+      cost_center: ${{ steps.guard.outputs.cost_center }}
 
     steps:
       - name: Checkout repo
@@ -52,7 +53,7 @@ jobs:
             -H "Authorization: Bearer $GH_MODELS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg system "You are Azure Guard, a strict Azure compliance validator for Resource Groups. Respond ONLY with valid JSON (no markdown fences). The 'report' field MUST be a markdown table (see Report Format in rules), never JSON arrays or bullet lists. Extract all values from the ISSUE BODY fields, not the title. Tags created-by and created-date are auto-set by the workflow — do NOT flag them as missing. Owner values like 'vinayjain' or 'ankur' are valid lowercase strings. If all fields are filled and naming is correct, return PASS. Do NOT invent violations." \
+              --arg system "You are Azure Guard, a strict Azure compliance validator for Resource Groups. Respond ONLY with valid JSON (no markdown fences) with keys: decision, rg_name, region, environment, owner, cost_center, report. The 'report' field MUST be a markdown table (see Report Format in rules), never JSON arrays or bullet lists. Extract all values from the ISSUE BODY fields, not the title. Tags created-by and created-date are auto-set by the workflow — do NOT flag them as missing. Owner values like 'vinayjain' or 'ankur' are valid lowercase strings. If all fields are filled and naming is correct, return PASS. Do NOT invent violations." \
               --arg user "$(echo -e "Validate this Azure resource group request.\n\nSHARED RULES:\n$(cat .github/agents/guards/shared-rules.md)\n\nRESOURCE GROUP RULES:\n$(cat .github/agents/guards/rg-rules.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY")" \
               '{
                 "model": "gpt-4o",
@@ -73,6 +74,7 @@ jobs:
           echo "region=$(echo "$AI_REPLY" | jq -r '.region')" >> $GITHUB_OUTPUT
           echo "environment=$(echo "$AI_REPLY" | jq -r '.environment')" >> $GITHUB_OUTPUT
           echo "owner=$(echo "$AI_REPLY" | jq -r '.owner')" >> $GITHUB_OUTPUT
+          echo "cost_center=$(echo "$AI_REPLY" | jq -r '.cost_center')" >> $GITHUB_OUTPUT
 
           REPORT=$(echo "$AI_REPLY" | jq -r '.report')
           echo "report<<EOF" >> $GITHUB_OUTPUT
@@ -159,7 +161,7 @@ jobs:
             -var="environment=${{ needs.azure-guard.outputs.environment }}" \
             -var="owner=${{ needs.azure-guard.outputs.owner }}" \
             -var="project=$(echo '${{ needs.azure-guard.outputs.rg_name }}' | cut -d'-' -f2)" \
-            -var="cost_center=engineering" \
+            -var="cost_center=${{ needs.azure-guard.outputs.cost_center }}" \
             -var="issue_number=${{ github.event.issue.number }}" \
             -out=tfplan 2>&1 | tee plan_output.txt
 
