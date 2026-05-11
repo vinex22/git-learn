@@ -31,12 +31,12 @@ jobs:
       contents: read
 
     outputs:
-      decision: ${{ steps.guard.outputs.decision }}
-      rg_name: ${{ steps.guard.outputs.rg_name }}
-      region: ${{ steps.guard.outputs.region }}
-      environment: ${{ steps.guard.outputs.environment }}
-      owner: ${{ steps.guard.outputs.owner }}
-      cost_center: ${{ steps.guard.outputs.cost_center }}
+      decision: ${{ steps.precheck.outputs.decision == 'FAIL' && 'FAIL' || steps.guard.outputs.decision }}
+      rg_name: ${{ steps.extract.outputs.rg_name }}
+      region: ${{ steps.extract.outputs.region }}
+      environment: ${{ steps.extract.outputs.environment }}
+      owner: ${{ steps.extract.outputs.owner }}
+      cost_center: ${{ steps.extract.outputs.cost_center }}
 
     steps:
       - name: Checkout repo
@@ -58,8 +58,85 @@ jobs:
           echo "cost_center=$(extract 'Cost Center')" >> $GITHUB_OUTPUT
           echo "purpose=$(extract 'Purpose')" >> $GITHUB_OUTPUT
 
+      - name: "� Pre-flight validation"
+        id: precheck
+        run: |
+          REPORT_FILE=$(mktemp)
+          ERRORS=0
+          fail() {
+            echo "| $1 | $2 | ❌ Fail | $3 |" >> "$REPORT_FILE"
+            ERRORS=$((ERRORS + 1))
+          }
+
+          RG="${{ steps.extract.outputs.rg_name }}"
+          REGION="${{ steps.extract.outputs.region }}"
+          ENV="${{ steps.extract.outputs.environment }}"
+          OWNER="${{ steps.extract.outputs.owner }}"
+          CC="${{ steps.extract.outputs.cost_center }}"
+
+          # Required fields
+          [ -z "$RG" ]     && fail "RG Name"      "_(empty)_" "Required field is empty"
+          [ -z "$REGION" ] && fail "Region"        "_(empty)_" "Required field is empty"
+          [ -z "$ENV" ]    && fail "Environment"   "_(empty)_" "Required field is empty"
+          [ -z "$OWNER" ]  && fail "Owner"         "_(empty)_" "Required field is empty"
+          [ -z "$CC" ]     && fail "Cost Center"   "_(empty)_" "Required field is empty"
+
+          # RG name pattern: rg-<project>-<env>
+          if [ -n "$RG" ]; then
+            if ! echo "$RG" | grep -qE '^rg-[a-z0-9]+-(dev|staging|prod)$'; then
+              fail "RG Name" "\`$RG\`" "Must match \`rg-<project>-<env>\`"
+            else
+              PROJ=$(echo "$RG" | cut -d'-' -f2)
+              if [ ${#PROJ} -gt 15 ]; then
+                fail "RG Name" "\`$RG\`" "Project \`$PROJ\` is ${#PROJ} chars (max 15)"
+              fi
+            fi
+          fi
+
+          # Environment value
+          if [ -n "$ENV" ] && [ "$ENV" != "dev" ] && [ "$ENV" != "staging" ] && [ "$ENV" != "prod" ]; then
+            fail "Environment" "\`$ENV\`" "Must be dev, staging, or prod"
+          fi
+
+          if [ $ERRORS -gt 0 ]; then
+            echo "decision=FAIL" >> $GITHUB_OUTPUT
+            {
+              echo "report<<ENDREPORT"
+              echo "| Field | Value | Status | Issue |"
+              echo "|-------|-------|--------|-------|"
+              cat "$REPORT_FILE"
+              echo "ENDREPORT"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "decision=PASS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "❌ Pre-flight BLOCKED"
+        if: steps.precheck.outputs.decision == 'FAIL'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## 🛡️ Azure Guard — Compliance Report
+
+            ### Status: ❌ BLOCKED
+
+            ${{ steps.precheck.outputs.report }}
+
+            ---
+            > 🤖 Pre-flight validation failed (deterministic check — no AI needed)
+            >
+            > **To fix:** Edit this issue with corrected values, or comment `/revalidate`.
+
+      - name: "Block on pre-flight failure"
+        if: steps.precheck.outputs.decision == 'FAIL'
+        run: |
+          echo "::error::Pre-flight validation failed."
+          exit 1
+
       - name: "🛡️ Azure Guard - AI Validation"
         id: guard
+        if: steps.precheck.outputs.decision != 'FAIL'
         env:
           GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
         run: |
