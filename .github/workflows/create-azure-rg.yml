@@ -57,25 +57,32 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # --- Send the issue + rules to the AI for validation ---
+      # --- Deterministic field extraction (no AI needed for parsing) ---
+      - name: "📋 Extract fields from issue body"
+        id: extract
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          extract() { echo "$ISSUE_BODY" | grep -A1 "### $1" | tail -1 | xargs; }
+          echo "rg_name=$(extract 'Resource Group Name')" >> $GITHUB_OUTPUT
+          echo "region=$(extract 'Azure Region')" >> $GITHUB_OUTPUT
+          echo "environment=$(extract 'Environment')" >> $GITHUB_OUTPUT
+          echo "owner=$(extract 'Owner')" >> $GITHUB_OUTPUT
+          echo "project=$(extract 'Project')" >> $GITHUB_OUTPUT
+          echo "cost_center=$(extract 'Cost Center')" >> $GITHUB_OUTPUT
+
+      # --- Send pre-extracted fields + rules to the AI for validation ---
       - name: "🛡️ Azure Guard - AI Validation"
         id: guard
         env:
           GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
-          # ---------------------------------------------------------------
-          # Call GitHub Models API (GPT-4o-mini) to validate the request
-          # We send: the rules file + issue body as the prompt
-          # We expect: a JSON response with decision (PASS/FAIL) + details
-          # ---------------------------------------------------------------
           RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
             -H "Authorization: Bearer $GH_MODELS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg system "You are Azure Guard, a strict Azure compliance validator for Resource Groups. Respond ONLY with valid JSON (no markdown fences). The 'report' field MUST be a markdown table (see Report Format in rules), never JSON arrays or bullet lists. Extract all values from the ISSUE BODY fields, not the title. Tags created-by and created-date are auto-set by the workflow — do NOT flag them as missing. Owner values like 'vinayjain' or 'ankur' are valid lowercase strings. If all fields are filled and naming is correct, return PASS. Do NOT invent violations." \
-              --arg user "$(echo -e "Validate this Azure resource group request.\n\nSHARED RULES:\n$(cat .github/agents/guards/shared-rules.md)\n\nRESOURCE GROUP RULES:\n$(cat .github/agents/guards/rg-rules.md)\n\nISSUE TITLE: $ISSUE_TITLE\n\nISSUE BODY:\n$ISSUE_BODY")" \
+              --arg system "You are Azure Guard, a strict Azure compliance validator for Resource Groups. Respond ONLY with valid JSON (no markdown fences). The 'report' field MUST be a markdown table (see Report Format in rules), never JSON arrays or bullet lists. IMPORTANT: The field values below have been pre-extracted from the issue. Use EXACTLY these values — do NOT substitute values from the title, GitHub username, or any other source. Owner can be ANY lowercase alphabetic string — there is no allowlist. Do NOT reject a valid lowercase name. Tags created-by and created-date are auto-set by the workflow — do NOT flag them as missing. If all fields are filled and naming is correct, return PASS. Do NOT invent violations." \
+              --arg user "$(echo -e "Validate this Azure resource group request.\n\nSHARED RULES:\n$(cat .github/agents/guards/shared-rules.md)\n\nRESOURCE GROUP RULES:\n$(cat .github/agents/guards/rg-rules.md)\n\nPRE-EXTRACTED FIELDS:\n- RG Name: ${{ steps.extract.outputs.rg_name }}\n- Region: ${{ steps.extract.outputs.region }}\n- Environment: ${{ steps.extract.outputs.environment }}\n- Owner: ${{ steps.extract.outputs.owner }}\n- Project: ${{ steps.extract.outputs.project }}\n- Cost Center: ${{ steps.extract.outputs.cost_center }}")" \
               '{
                 "model": "gpt-4o",
                 "messages": [
@@ -86,11 +93,6 @@ jobs:
               }'
             )")
 
-          # ---------------------------------------------------------------
-          # Parse the AI response
-          # The API returns: { choices: [{ message: { content: "..." } }] }
-          # We extract the AI's text, strip code fences, then parse as JSON
-          # ---------------------------------------------------------------
           AI_REPLY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           echo "AI Reply: $AI_REPLY"
 

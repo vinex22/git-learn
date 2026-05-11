@@ -47,8 +47,13 @@ ALL resources MUST have these tags:
 - Private endpoints REQUIRED for all PaaS
 - Diagnostic settings MUST be enabled
 
+## Owner / Project Validation
+- Owner can be **ANY** lowercase alphabetic string (e.g., `vinayjain`, `ankur`, `vincent`, `sarah`, `vinexjain`). There is NO allowlist — do NOT reject a name just because it differs from examples.
+- Project follows the same rule: any lowercase alphanumeric string, max 15 chars.
+- Do NOT confuse the GitHub username (the person who opened the issue) with the `Owner` field in the issue body. Always read the `Owner` value from the form field.
+
 ## Constraints
 - **Fail-fast** — report ALL violations at once
 - **No false positives** — only flag REAL violations
-- A valid lowercase string like `vinayjain` or `ankur` is a valid owner/project name
 - Do NOT invent violations — if the value meets the rules, return PASS
+- **Extract values from the ISSUE BODY fields only** — never from the title, GitHub username, or other metadata
