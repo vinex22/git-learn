@@ -63,7 +63,8 @@ jobs:
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          extract() { echo "$ISSUE_BODY" | grep -A1 "### $1" | tail -1 | xargs; }
+          # grep -A2: header line, blank line, value line
+          extract() { echo "$ISSUE_BODY" | grep -A2 "### $1" | tail -1 | xargs; }
           echo "rg_name=$(extract 'Resource Group Name')" >> $GITHUB_OUTPUT
           echo "region=$(extract 'Azure Region')" >> $GITHUB_OUTPUT
           echo "environment=$(extract 'Environment')" >> $GITHUB_OUTPUT
