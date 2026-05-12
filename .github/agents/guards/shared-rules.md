@@ -7,7 +7,7 @@ These rules apply to ALL Azure resource requests.
 - `<project>` must be lowercase, alphanumeric, max 15 chars
 - No uppercase letters anywhere
 - No generic names like `test`, `temp`, `myresource`, `resource1`
-- The word `devil` is **strictly forbidden** in any part of the resource name
+- The word `tony` is **strictly forbidden** in any part of the resource name
 
 ## Required Tags
 
